@@ -1,0 +1,124 @@
+services:
+
+  # ══════════════════════════════════════════════════════
+  #  Ollama — ローカルLLMエンジン（メイン推論基盤）
+  #  軽量タスク：qwen2.5-coder:7b（月$0・プライバシー完全）
+  #  重量タスク：Claude API（BUDGET.ymlで制御）
+  # ══════════════════════════════════════════════════════
+  ollama:
+    image: ollama/ollama:latest
+    container_name: oc_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_MAX_LOADED_MODELS=2
+    restart: unless-stopped
+    # GPU使用時はコメントアウト解除（CPU推論でも動作する）
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ══════════════════════════════════════════════════════
+  #  OC-Core — 基盤OS（Job Queue / Approval / Runner）
+  # ══════════════════════════════════════════════════════
+  core:
+    build:
+      context: ./core
+      dockerfile: Dockerfile
+    container_name: oc_core
+    env_file: .env
+    ports:
+      - "8787:8787"
+    volumes:
+      - ${OC_MOUNT}:/oc
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ══════════════════════════════════════════════════════
+  #  Telegram Bot — モバイル指揮・承認・通知
+  # ══════════════════════════════════════════════════════
+  telegram:
+    build:
+      context: ./interfaces/telegram
+      dockerfile: Dockerfile
+    container_name: oc_telegram
+    env_file: .env
+    depends_on:
+      core:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════════════════
+  #  OpenWebUI — チャットUI（PCでAI相談・モデル管理）
+  #  localhost:3000 でアクセス
+  # ══════════════════════════════════════════════════════
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: oc_openwebui
+    ports:
+      - "3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+      - WEBUI_AUTH=true
+    volumes:
+      - openwebui_data:/app/backend/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════════════════
+  #  Syncthing — P2Pファイル同期（生成物→モバイル・NAS）
+  #  localhost:8384 で管理画面
+  #  注意: 同期 ≠ バックアップ。rcloneと必ず併用すること
+  # ══════════════════════════════════════════════════════
+  syncthing:
+    image: syncthing/syncthing:latest
+    container_name: oc_syncthing
+    environment:
+      - PUID=1000
+      - PGID=1000
+    ports:
+      - "8384:8384"   # 管理画面
+      - "22000:22000/tcp"  # P2P同期
+      - "22000:22000/udp"
+      - "21027:21027/udp"  # デバイス検出
+    volumes:
+      - syncthing_config:/var/syncthing/config
+      - ${OC_MOUNT}/staging:/sync/staging        # AIの生成物
+      - ${OC_MOUNT}/assets:/sync/assets          # 原本
+      - ${OC_MOUNT}/ObsidianVault:/sync/vault    # Vault
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════════════════
+  #  Miyabi Runtime — AIエンジン（Phase2で有効化）
+  # ══════════════════════════════════════════════════════
+  # miyabi:
+  #   build: ./miyabi-runtime
+  #   container_name: oc_miyabi
+  #   env_file: .env
+  #   ports:
+  #     - "9090:9090"
+  #   depends_on:
+  #     - ollama
+  #     - core
+  #   restart: unless-stopped
+
+volumes:
+  ollama_data:
+  openwebui_data:
+  syncthing_config:
