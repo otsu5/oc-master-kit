@@ -1,43 +1,38 @@
 # ════════════════════════════════════════════════════════════
-#  BUDGET.yml — AIコスト制御設定
+#  BUDGET.yml — AIコスト制御設定（OC-Core が読み込んで強制する）
 #
-#  設計思想（PDFベース）:
+#  設計思想:
 #  - 軽量タスク → Ollama（月$0・ローカル・プライバシー完全）
-#  - 重量タスク → Claude API（このBUDGETで制御）
-#  - Ollamaが動かない場合のみClaudeへフォールバック
+#  - 重量タスク → Claude API（この設定で日次/月次制限を強制）
+#  - Ollamaとmockは常にコスト0扱い（制限対象外）
 # ════════════════════════════════════════════════════════════
 
 daily_limit_usd: 5.00
 monthly_limit_usd: 50.00
 alert_threshold: 0.8   # 80%でTelegram警告
 
-# ── モデルルーティング ──────────────────────────────────────
+# ── モデルルーティング参考 ─────────────────────────────────
 model_routing:
-  # 分類・要約・ルーティング → Ollama（無料）
   classify:
     provider: ollama
     model: qwen2.5-coder:7b
     max_tokens: 1000
 
-  # 軽量ツール実行 → Ollama
   simple_task:
     provider: ollama
     model: qwen2.5-coder:7b
     max_tokens: 2000
 
-  # 設計・計画・複雑なタスク → Claude Sonnet
   planning:
     provider: claude
     model: claude-sonnet-4-5
     max_tokens: 4096
 
-  # 最高品質が必要なタスク → Claude Opus
   orchestrate:
     provider: claude
     model: claude-opus-4-5
     max_tokens: 8192
 
-  # PRレビュー → OpenAI（Phase3〜）
   review:
     provider: openai
     model: gpt-4o
@@ -47,7 +42,7 @@ model_routing:
 ollama:
   base_url: http://ollama:11434
   heartbeat:
-    enabled: false      # heartbeatオフ（PDFで明記）
+    enabled: false
     every: "2h"
   context:
     max_tokens: 40000
@@ -55,12 +50,11 @@ ollama:
   routing:
     simple_queries: qwen2.5-coder:7b
     complex: qwen2.5-coder:7b
-  max_concurrent: 3     # 暴走防止
+  max_concurrent: 3
   temperature: 0.2
   top_p: 0.9
 
-# ── おすすめモデル優先順位（PDFより）────────────────────
+# ── おすすめモデル優先順位 ─────────────────────────────────
 # 1位: qwen2.5-coder:7b   日本語そこそこ・ツール安定・16GBで動く
-# 2位: phi-4-mini-instruct 3.8B・爆速・軽量タスク向き
-# 3位: gemma3:9b           新顔・期待値高い（2026年2月登場）
-# ※ ollama run qwen2.5-coder:7b で事前ダウンロード必須
+# 2位: phi-4-mini          3.8B・爆速・軽量タスク向き
+# 3位: gemma3:9b           新顔・期待値高い

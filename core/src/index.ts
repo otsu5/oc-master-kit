@@ -1,10 +1,15 @@
 import express from 'express'
 import { v4 as uuid } from 'uuid'
-import { db, initDB, auditLog, type AgentType } from './db.js'
+import { db, initDB, auditLog, logCost, type AgentType, type Job } from './db.js'
 import { writeResult, stagingSummary } from './runner.service.js'
 import { getAdapter } from './adapters.js'
+import { authMiddleware, checkAuthConfig } from './auth.js'
+import { checkBudget, getBudgetSummary } from './budget.js'
+import { CreateJobSchema, RunJobSchema, CancelJobSchema } from './validate.js'
 
 initDB()
+checkAuthConfig()
+
 const app = express()
 app.use(express.json())
 app.use((req, _res, next) => {
@@ -12,15 +17,23 @@ app.use((req, _res, next) => {
   next()
 })
 
-// ── ヘルスチェック ────────────────────────────────────────
+// 認証ミドルウェア（/health 以外に適用）
+app.use(authMiddleware)
+
+// ── ヘルスチェック（認証不要）─────────────────────────────
 app.get('/health', (_req, res) => res.json({ ok: true, ts: Date.now() }))
 
-// ── ジョブ登録（デフォルトagentType: ollama）─────────────
+// ── ジョブ登録 ────────────────────────────────────────────
 app.post('/jobs', (req, res) => {
-  // デフォルトをollamaに変更（PDF設計に準拠）
-  const { text, agentType = 'ollama', userId = 'unknown' } = req.body
+  const parsed = CreateJobSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'Validation failed',
+      details: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`)
+    })
+  }
 
-  if (!text?.trim()) return res.status(400).json({ error: 'text is required' })
+  const { text, agentType, userId } = parsed.data
 
   const date  = new Date().toISOString().slice(0, 10).replace(/-/g, '')
   const short = uuid().slice(0, 8)
@@ -29,9 +42,9 @@ app.post('/jobs', (req, res) => {
   db.prepare(`
     INSERT INTO jobs (id, text, agent_type, status, created_by, created_at)
     VALUES (?, ?, ?, 'PENDING', ?, ?)
-  `).run(id, text.trim(), agentType as AgentType, String(userId), Date.now())
+  `).run(id, text, agentType as AgentType, userId, Date.now())
 
-  auditLog(id, 'CREATED', String(userId), text.trim())
+  auditLog(id, 'CREATED', userId, text.slice(0, 200))
   console.log(`[JOB] Created: ${id} agent=${agentType} by=${userId}`)
 
   res.status(201).json({ id, status: 'PENDING', agentType })
@@ -55,43 +68,70 @@ app.get('/jobs/:id', (req, res) => {
 
 // ── ジョブ実行（承認＋実行）──────────────────────────────
 app.post('/jobs/:id/run', async (req, res) => {
-  const { approvedBy = 'unknown' } = req.body
-  const job = db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(req.params.id) as any
+  const parsed = RunJobSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid request' })
+
+  const { approvedBy } = parsed.data
+  const job = db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(req.params.id) as Job | undefined
 
   if (!job) return res.status(404).json({ error: 'Job not found' })
   if (job.status !== 'PENDING') {
     return res.status(400).json({ error: `Cannot run: status=${job.status}` })
   }
 
+  // 予算チェック（Ollama以外）
+  const budgetCheck = checkBudget(job.agent_type)
+  if (!budgetCheck.allowed) {
+    auditLog(job.id, 'BUDGET_BLOCKED', approvedBy, budgetCheck.reason)
+    return res.status(429).json({
+      error: 'Budget limit reached',
+      reason: budgetCheck.reason,
+      budget: { daily: budgetCheck.dailyCost, monthly: budgetCheck.monthlyCost }
+    })
+  }
+
   db.prepare(`UPDATE jobs SET status='RUNNING', approved_by=?, approved_at=? WHERE id=?`)
     .run(approvedBy, Date.now(), job.id)
-  auditLog(job.id, 'APPROVED_AND_RUNNING', String(approvedBy))
+  auditLog(job.id, 'APPROVED_AND_RUNNING', approvedBy)
 
-  res.json({ ok: true, jobId: job.id, status: 'RUNNING', agentType: job.agent_type })
+  res.json({
+    ok: true, jobId: job.id, status: 'RUNNING',
+    agentType: job.agent_type,
+    budgetWarning: budgetCheck.warning ?? null
+  })
 
   // バックグラウンド実行
   ;(async () => {
     try {
       const adapter = getAdapter(job.agent_type)
       console.log(`[JOB] Running ${job.id} via ${adapter.name}`)
-      const result   = await adapter.generate(job.text)
-      const filePath = writeResult(job.id, result)
+      const result = await adapter.generate(job.text)
+
+      // コスト記録
+      logCost(job.id, adapter.provider, adapter.model, result.costUsd, result.tokensIn, result.tokensOut)
+
+      const filePath = writeResult(job.id, result.text)
 
       db.prepare(`UPDATE jobs SET status='DONE', result_path=? WHERE id=?`).run(filePath, job.id)
-      auditLog(job.id, 'DONE', 'system', filePath)
-      console.log(`[JOB] Done: ${job.id} → ${filePath}`)
+      auditLog(job.id, 'DONE', 'system', `path=${filePath} cost=$${result.costUsd.toFixed(4)}`)
+      console.log(`[JOB] Done: ${job.id} → ${filePath} ($${result.costUsd.toFixed(4)})`)
     } catch (err: any) {
-      db.prepare(`UPDATE jobs SET status='ERROR', error=? WHERE id=?`).run(err.message, job.id)
+      const retryCount = (job.retry_count ?? 0) + 1
+      db.prepare(`UPDATE jobs SET status='ERROR', error=?, retry_count=? WHERE id=?`)
+        .run(err.message, retryCount, job.id)
       auditLog(job.id, 'ERROR', 'system', err.message)
-      console.error(`[JOB] Error: ${job.id}`, err.message)
+      console.error(`[JOB] Error: ${job.id} (attempt ${retryCount})`, err.message)
     }
   })()
 })
 
 // ── ジョブキャンセル ─────────────────────────────────────
 app.post('/jobs/:id/cancel', (req, res) => {
-  const { cancelledBy = 'unknown' } = req.body
-  const job = db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(req.params.id) as any
+  const parsed = CancelJobSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid request' })
+
+  const { cancelledBy } = parsed.data
+  const job = db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(req.params.id) as Job | undefined
 
   if (!job) return res.status(404).json({ error: 'Job not found' })
   if (!['PENDING', 'APPROVED'].includes(job.status)) {
@@ -99,21 +139,23 @@ app.post('/jobs/:id/cancel', (req, res) => {
   }
 
   db.prepare(`UPDATE jobs SET status='CANCELLED' WHERE id=?`).run(job.id)
-  auditLog(job.id, 'CANCELLED', String(cancelledBy))
+  auditLog(job.id, 'CANCELLED', cancelledBy)
   res.json({ ok: true, jobId: job.id })
 })
 
-// ── システム状態（Telegram監視用）────────────────────────
+// ── システム状態 ──────────────────────────────────────────
 app.get('/status', (_req, res) => {
   const summary = db.prepare(
     `SELECT status, COUNT(*) as count FROM jobs GROUP BY status`
   ).all() as { status: string; count: number }[]
 
   const staging = stagingSummary()
+  const budget = getBudgetSummary()
 
   res.json({
     jobs: Object.fromEntries(summary.map(r => [r.status, r.count])),
     staging,
+    budget,
     ts: Date.now()
   })
 })

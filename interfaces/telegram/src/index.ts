@@ -4,7 +4,7 @@ import { isAdmin, isAllowed } from './auth.js'
 import {
   msgQueued, msgRunning, msgDone, msgError,
   msgCancelled, msgJobList, msgJobDetail,
-  msgStatus, msgHelp, msgAgentMenu
+  msgStatus, msgHelp
 } from './messages.js'
 
 const token = process.env.TELEGRAM_BOT_TOKEN
@@ -16,7 +16,6 @@ console.log('[TG] Bot started')
 const reply      = (cid: number, text: string) => bot.sendMessage(cid, text, { parse_mode: 'MarkdownV2' })
 const replyPlain = (cid: number, text: string) => bot.sendMessage(cid, text)
 
-// 承認ボタン付き送信
 const replyWithApproval = (cid: number, jobId: string, text: string) =>
   bot.sendMessage(cid, text, {
     parse_mode: 'MarkdownV2',
@@ -27,6 +26,28 @@ const replyWithApproval = (cid: number, jobId: string, text: string) =>
       ]]
     }
   })
+
+// ── agentType パーサー（P2修正: 明確なロジック）──────────
+const VALID_AGENTS = new Set(['ollama', 'claude', 'opus', 'openai', 'miyabi', 'runpod', 'mock'])
+
+function parseAddInput(input: string): { text: string; agentType: string } {
+  const trimmed = input.trim()
+  if (!trimmed) return { text: '', agentType: 'ollama' }
+
+  const words = trimmed.split(/\s+/)
+  const lastWord = words[words.length - 1].toLowerCase()
+
+  // 最後の単語がagentType指定かつ、テキスト部分が残る場合のみ分離
+  if (words.length >= 2 && VALID_AGENTS.has(lastWord)) {
+    return {
+      text: words.slice(0, -1).join(' '),
+      agentType: lastWord,
+    }
+  }
+
+  // それ以外はすべてOllamaでテキスト全体を使用
+  return { text: trimmed, agentType: 'ollama' }
+}
 
 // ══════════════════════════════════════════════════════════
 //  /start /help
@@ -39,32 +60,20 @@ bot.onText(/^\/start$|^\/help$/, async (msg) => {
 
 // ══════════════════════════════════════════════════════════
 //  /add <text> [agent]
-//  例: /add ObsidianVaultを要約して
-//  例: /add 画像生成: 富士山 runpod
-//  デフォルトagentType: ollama（月$0）
 // ══════════════════════════════════════════════════════════
 bot.onText(/^\/add (.+)$/s, async (msg, match) => {
   const uid = msg.from?.id
   if (!uid || !isAllowed(uid)) return replyPlain(msg.chat.id, '⛔ アクセス権限なし')
 
-  const input = match?.[1]?.trim()
-  if (!input) return replyPlain(msg.chat.id, '使い方: /add <内容> [ollama|claude|runpod]')
+  const rawInput = match?.[1]
+  if (!rawInput) return replyPlain(msg.chat.id, '使い方: /add <内容> [ollama|claude|runpod]')
 
-  // 末尾のagentType指定を解析
-  const validAgents = ['ollama', 'claude', 'opus', 'openai', 'miyabi', 'runpod', 'mock']
-  const parts = input.split(' ')
-  const lastWord = parts[parts.length - 1].toLowerCase()
-  const agentType = validAgents.includes(lastWord) ? lastWord : 'ollama'  // デフォルトollama
-  const text = agentType !== 'ollama' || validAgents.includes(lastWord) && lastWord !== parts.join(' ')
-    ? parts.slice(0, -1).join(' ') || input
-    : input
-
-  const finalText  = validAgents.includes(lastWord) ? parts.slice(0, -1).join(' ') : input
-  const finalAgent = validAgents.includes(lastWord) ? lastWord : 'ollama'
+  const { text, agentType } = parseAddInput(rawInput)
+  if (!text) return replyPlain(msg.chat.id, '使い方: /add <内容> [ollama|claude|runpod]')
 
   try {
-    const job = await api.addJob(finalText || input, String(uid), finalAgent)
-    const msgText = msgQueued({ id: job.id, text: finalText || input, agentType: finalAgent })
+    const job = await api.addJob(text, String(uid), agentType)
+    const msgText = msgQueued({ id: job.id, text, agentType })
 
     if (isAdmin(uid)) {
       await replyWithApproval(msg.chat.id, job.id, msgText)
@@ -72,12 +81,13 @@ bot.onText(/^\/add (.+)$/s, async (msg, match) => {
       await reply(msg.chat.id, msgText)
     }
   } catch (e: any) {
-    await replyPlain(msg.chat.id, `❌ エラー: ${e.message}`)
+    const errMsg = e.response?.data?.error ?? e.message
+    await replyPlain(msg.chat.id, `❌ エラー: ${errMsg}`)
   }
 })
 
 // ══════════════════════════════════════════════════════════
-//  /list — ジョブ一覧
+//  /list
 // ══════════════════════════════════════════════════════════
 bot.onText(/^\/list$/, async (msg) => {
   const uid = msg.from?.id
@@ -91,7 +101,7 @@ bot.onText(/^\/list$/, async (msg) => {
 })
 
 // ══════════════════════════════════════════════════════════
-//  /job <id> — ジョブ詳細
+//  /job <id>
 // ══════════════════════════════════════════════════════════
 bot.onText(/^\/job (.+)$/, async (msg, match) => {
   const uid = msg.from?.id
@@ -117,7 +127,7 @@ bot.onText(/^\/job (.+)$/, async (msg, match) => {
 })
 
 // ══════════════════════════════════════════════════════════
-//  /run <id> — 実行承認（管理者のみ）
+//  /run <id>
 // ══════════════════════════════════════════════════════════
 bot.onText(/^\/run (.+)$/, async (msg, match) => {
   const uid = msg.from?.id
@@ -126,10 +136,12 @@ bot.onText(/^\/run (.+)$/, async (msg, match) => {
   if (!id) return replyPlain(msg.chat.id, '使い方: /run <id>')
   await replyPlain(msg.chat.id, `🔥 実行中: ${id}`)
   try {
-    await api.runJob(id, String(uid))
+    const result = await api.runJob(id, String(uid))
+    await reply(msg.chat.id, msgRunning(id, result.budgetWarning))
     await pollJobResult(msg.chat.id, id)
   } catch (e: any) {
-    await replyPlain(msg.chat.id, `❌ ${e.message}`)
+    const errMsg = e.response?.data?.reason ?? e.response?.data?.error ?? e.message
+    await replyPlain(msg.chat.id, `❌ ${errMsg}`)
   }
 })
 
@@ -150,7 +162,7 @@ bot.onText(/^\/cancel (.+)$/, async (msg, match) => {
 })
 
 // ══════════════════════════════════════════════════════════
-//  /status — システム状態
+//  /status
 // ══════════════════════════════════════════════════════════
 bot.onText(/^\/status$/, async (msg) => {
   const uid = msg.from?.id
@@ -184,11 +196,12 @@ bot.on('callback_query', async (query) => {
       ).catch(() => {})
     }
     try {
-      await api.runJob(jobId, String(uid))
-      await reply(chatId, msgRunning(jobId))
+      const result = await api.runJob(jobId, String(uid))
+      await reply(chatId, msgRunning(jobId, result.budgetWarning))
       await pollJobResult(chatId, jobId, msgId)
     } catch (e: any) {
-      await replyPlain(chatId, `❌ ${e.message}`)
+      const errMsg = e.response?.data?.reason ?? e.response?.data?.error ?? e.message
+      await replyPlain(chatId, `❌ ${errMsg}`)
     }
   }
 

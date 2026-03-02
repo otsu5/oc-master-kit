@@ -25,9 +25,10 @@ export function msgQueued(job: { id: string; text: string; agentType?: string })
 _管理者が_ \`/run ${job.id}\` _で承認_`
 }
 
-export function msgRunning(jobId: string) {
+export function msgRunning(jobId: string, budgetWarning?: string | null) {
+  const warn = budgetWarning ? `\n${esc(budgetWarning)}` : ''
   return `🔥 *Running\\.\\.\\.*
-🆔 \`${jobId}\`
+🆔 \`${jobId}\`${warn}
 🕐 ${jst()}`
 }
 
@@ -80,24 +81,28 @@ export function msgJobList(jobs: Job[]) {
 export function msgStatus(s: StatusSummary) {
   const jobLines = Object.entries(s.jobs).map(([k, v]) => `  ${k}: ${v}`).join('\n') || '  なし'
   const fileLines = s.staging.files.slice(-5).map(f => `  📄 ${esc(f)}`).join('\n') || '  なし'
+  const b = s.budget
+  const budgetLine = `  日次: $${b.daily.used.toFixed(2)}/$${b.daily.limit.toFixed(2)}\n  月次: $${b.monthly.used.toFixed(2)}/$${b.monthly.limit.toFixed(2)}`
   return `📊 *System Status*
 ━━━━━━━━━━━━━━
 *Jobs:*
 ${esc(jobLines)}
 *Staging \\(${s.staging.count}件\\):*
 ${fileLines}
+*Budget:*
+${esc(budgetLine)}
 📱 _Syncthingが自動配送中_
 🕐 ${jst()}`
 }
 
-export function msgHelp(isAdmin: boolean) {
-  const adminPart = isAdmin ? `
+export function msgHelp(admin: boolean) {
+  const adminPart = admin ? `
 *管理者コマンド:*
 \`/run <id>\` — 実行承認
 \`/cancel <id>\` — キャンセル
 \`/status\` — システム状態` : ''
 
-  return `🤖 *OC\\-Master v4*
+  return `🤖 *OC\\-Master v5*
 ━━━━━━━━━━━━━━
 *基本コマンド:*
 \`/add <内容>\` — Ollamaでジョブ追加
@@ -108,12 +113,7 @@ export function msgHelp(isAdmin: boolean) {
 \`/help\` — このヘルプ
 ${adminPart}
 ━━━━━━━━━━━━━━
-🦙 _Default: Ollama（ローカル・月\\$0）_
-🌸 _Powered by Miyabi_`
-}
-
-export function msgAgentMenu(jobId: string) {
-  return `🤖 エージェントを選択してください:`
+🦙 _Default: Ollama（ローカル・月\\$0）_`
 }
 
 function esc(s: string) {

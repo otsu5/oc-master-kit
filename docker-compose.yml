@@ -2,8 +2,6 @@ services:
 
   # ══════════════════════════════════════════════════════
   #  Ollama — ローカルLLMエンジン（メイン推論基盤）
-  #  軽量タスク：qwen2.5-coder:7b（月$0・プライバシー完全）
-  #  重量タスク：Claude API（BUDGET.ymlで制御）
   # ══════════════════════════════════════════════════════
   ollama:
     image: ollama/ollama:latest
@@ -16,7 +14,7 @@ services:
       - OLLAMA_KEEP_ALIVE=24h
       - OLLAMA_MAX_LOADED_MODELS=2
     restart: unless-stopped
-    # GPU使用時はコメントアウト解除（CPU推論でも動作する）
+    # GPU使用時はコメントアウト解除
     # deploy:
     #   resources:
     #     reservations:
@@ -35,7 +33,7 @@ services:
     container_name: oc_core
     env_file: .env
     ports:
-      - "8787:8787"
+      - "127.0.0.1:8787:8787"   # localhostのみ公開（セキュリティ）
     volumes:
       - ${OC_MOUNT}:/oc
     depends_on:
@@ -64,7 +62,6 @@ services:
 
   # ══════════════════════════════════════════════════════
   #  OpenWebUI — チャットUI（PCでAI相談・モデル管理）
-  #  localhost:3000 でアクセス
   # ══════════════════════════════════════════════════════
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
@@ -82,9 +79,9 @@ services:
     restart: unless-stopped
 
   # ══════════════════════════════════════════════════════
-  #  Syncthing — P2Pファイル同期（生成物→モバイル・NAS）
-  #  localhost:8384 で管理画面
-  #  注意: 同期 ≠ バックアップ。rcloneと必ず併用すること
+  #  Syncthing — P2Pファイル同期（生成物→モバイル）
+  #  注意: 同期 ≠ バックアップ。rcloneと必ず併用
+  #  注意: assetsは同期対象外（削除禁止ポリシー違反防止）
   # ══════════════════════════════════════════════════════
   syncthing:
     image: syncthing/syncthing:latest
@@ -93,30 +90,16 @@ services:
       - PUID=1000
       - PGID=1000
     ports:
-      - "8384:8384"   # 管理画面
-      - "22000:22000/tcp"  # P2P同期
+      - "8384:8384"
+      - "22000:22000/tcp"
       - "22000:22000/udp"
-      - "21027:21027/udp"  # デバイス検出
+      - "21027:21027/udp"
     volumes:
       - syncthing_config:/var/syncthing/config
-      - ${OC_MOUNT}/staging:/sync/staging        # AIの生成物
-      - ${OC_MOUNT}/assets:/sync/assets          # 原本
-      - ${OC_MOUNT}/ObsidianVault:/sync/vault    # Vault
+      - ${OC_MOUNT}/staging:/sync/staging
+      - ${OC_MOUNT}/ObsidianVault:/sync/vault
+      # assetsは意図的に除外（削除禁止ポリシー）
     restart: unless-stopped
-
-  # ══════════════════════════════════════════════════════
-  #  Miyabi Runtime — AIエンジン（Phase2で有効化）
-  # ══════════════════════════════════════════════════════
-  # miyabi:
-  #   build: ./miyabi-runtime
-  #   container_name: oc_miyabi
-  #   env_file: .env
-  #   ports:
-  #     - "9090:9090"
-  #   depends_on:
-  #     - ollama
-  #     - core
-  #   restart: unless-stopped
 
 volumes:
   ollama_data:

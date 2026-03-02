@@ -1,0 +1,42 @@
+# ── Dependencies ──────────────────────────────────
+node_modules/
+
+# ── Build artifacts ───────────────────────────────
+dist/
+*.js.map
+
+# ── Environment / Secrets ─────────────────────────
+.env
+*.env.local
+
+# ── Database ──────────────────────────────────────
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# ── Logs ──────────────────────────────────────────
+*.log
+logs/
+
+# ── OS ────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Docker volumes (local dev) ────────────────────
+ollama_data/
+openwebui_data/
+syncthing_config/
+
+# ── Runtime data ──────────────────────────────────
+staging/
+processed/
+agent/queue/
+agent/logs/
+agent/backups/
