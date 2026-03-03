@@ -32,8 +32,8 @@ services:
       dockerfile: Dockerfile
     container_name: oc_core
     env_file: .env
-    ports:
-      - "127.0.0.1:8787:8787"   # localhostのみ公開（セキュリティ）
+    expose:
+      - "8787"   # コンテナ間通信のみ（ホストに公開しない）
     volumes:
       - ${OC_MOUNT}:/oc
     depends_on:
@@ -55,6 +55,23 @@ services:
       dockerfile: Dockerfile
     container_name: oc_telegram
     env_file: .env
+    depends_on:
+      core:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════════════════
+  #  Discord Bot — 書庫モード（スレッド整理・閲覧・検索）
+  #  Telegramがメイン指揮、Discordは情報アーカイブUI
+  # ══════════════════════════════════════════════════════
+  discord:
+    build:
+      context: ./interfaces/discord
+      dockerfile: Dockerfile
+    container_name: oc_discord
+    env_file: .env
+    volumes:
+      - ${OC_MOUNT}:/oc:ro   # read-only（Discordは閲覧のみ）
     depends_on:
       core:
         condition: service_healthy

@@ -2,6 +2,15 @@ import type { Request, Response, NextFunction } from 'express'
 
 const API_TOKEN = process.env.CORE_API_TOKEN
 
+// ── Admin ID管理（Core側で強制）─────────────────────────
+// Telegram/Discord側のisAdminに依存しない。Core自身が判定する。
+const ADMIN_IDS = new Set(
+  (process.env.TELEGRAM_ADMIN_IDS ?? '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+)
+
 /**
  * Core API 認証ミドルウェア
  *
@@ -33,11 +42,27 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
   next()
 }
 
+/**
+ * Core側admin判定 — Interface層のisAdminを信用しない
+ * approvedByのUserIDがADMIN_IDSに含まれるか検証
+ */
+export function isAdminUser(userId: string): boolean {
+  // ADMIN_IDS未設定 = 開発モード（全員admin扱い・起動時警告）
+  if (ADMIN_IDS.size === 0) return true
+  return ADMIN_IDS.has(userId)
+}
+
 export function checkAuthConfig() {
   if (!API_TOKEN) {
     console.warn('[AUTH] ⚠️  CORE_API_TOKEN is not set — API is unauthenticated!')
     console.warn('[AUTH] ⚠️  Set CORE_API_TOKEN in .env for production use')
   } else {
     console.log('[AUTH] ✅ API token authentication enabled')
+  }
+
+  if (ADMIN_IDS.size === 0) {
+    console.warn('[AUTH] ⚠️  TELEGRAM_ADMIN_IDS is not set — all users treated as admin!')
+  } else {
+    console.log(`[AUTH] ✅ Admin IDs: ${ADMIN_IDS.size} user(s) configured`)
   }
 }

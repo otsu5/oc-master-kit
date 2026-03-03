@@ -82,7 +82,10 @@ export function msgStatus(s: StatusSummary) {
   const jobLines = Object.entries(s.jobs).map(([k, v]) => `  ${k}: ${v}`).join('\n') || '  なし'
   const fileLines = s.staging.files.slice(-5).map(f => `  📄 ${esc(f)}`).join('\n') || '  なし'
   const b = s.budget
+  const m = s.memory
   const budgetLine = `  日次: $${b.daily.used.toFixed(2)}/$${b.daily.limit.toFixed(2)}\n  月次: $${b.monthly.used.toFixed(2)}/$${b.monthly.limit.toFixed(2)}`
+  const memIcon = m.freeGB < 1.5 ? '🔴' : m.freeGB < 3 ? '🟡' : '🟢'
+  const memLine = `  ${memIcon} ${m.freeGB}GB free / ${m.totalGB}GB \\(${m.usedPct}%\\)`
   return `📊 *System Status*
 ━━━━━━━━━━━━━━
 *Jobs:*
@@ -91,6 +94,8 @@ ${esc(jobLines)}
 ${fileLines}
 *Budget:*
 ${esc(budgetLine)}
+*Memory:*
+${memLine}
 📱 _Syncthingが自動配送中_
 🕐 ${jst()}`
 }

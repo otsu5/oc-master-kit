@@ -3,12 +3,15 @@ import { v4 as uuid } from 'uuid'
 import { db, initDB, auditLog, logCost, type AgentType, type Job } from './db.js'
 import { writeResult, stagingSummary } from './runner.service.js'
 import { getAdapter } from './adapters.js'
-import { authMiddleware, checkAuthConfig } from './auth.js'
+import { authMiddleware, checkAuthConfig, isAdminUser } from './auth.js'
 import { checkBudget, getBudgetSummary } from './budget.js'
 import { CreateJobSchema, RunJobSchema, CancelJobSchema } from './validate.js'
+import { sanitizePrompt } from './sanitize.js'
+import { startMemoryMonitor, isMemoryPressure, getMemoryStatus } from './memory.js'
 
 initDB()
 checkAuthConfig()
+startMemoryMonitor()
 
 const app = express()
 app.use(express.json())
@@ -35,6 +38,15 @@ app.post('/jobs', (req, res) => {
 
   const { text, agentType, userId } = parsed.data
 
+  // プロンプトサニタイズ（危険パターンブロック）
+  const sanitized = sanitizePrompt(text)
+  if (!sanitized.safe) {
+    return res.status(400).json({
+      error: 'Prompt blocked by safety filter',
+      reason: sanitized.blocked,
+    })
+  }
+
   const date  = new Date().toISOString().slice(0, 10).replace(/-/g, '')
   const short = uuid().slice(0, 8)
   const id    = `${date}-${short}`
@@ -42,9 +54,9 @@ app.post('/jobs', (req, res) => {
   db.prepare(`
     INSERT INTO jobs (id, text, agent_type, status, created_by, created_at)
     VALUES (?, ?, ?, 'PENDING', ?, ?)
-  `).run(id, text, agentType as AgentType, userId, Date.now())
+  `).run(id, sanitized.sanitized, agentType as AgentType, userId, Date.now())
 
-  auditLog(id, 'CREATED', userId, text.slice(0, 200))
+  auditLog(id, 'CREATED', userId, sanitized.sanitized.slice(0, 200))
   console.log(`[JOB] Created: ${id} agent=${agentType} by=${userId}`)
 
   res.status(201).json({ id, status: 'PENDING', agentType })
@@ -72,11 +84,27 @@ app.post('/jobs/:id/run', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Invalid request' })
 
   const { approvedBy } = parsed.data
+  
+  // Core側admin判定（Interface層のisAdminを信用しない）
+  if (!isAdminUser(approvedBy)) {
+    return res.status(403).json({ error: 'Admin permission required (Core-enforced)', userId: approvedBy })
+  }
+
   const job = db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(req.params.id) as Job | undefined
 
   if (!job) return res.status(404).json({ error: 'Job not found' })
   if (job.status !== 'PENDING') {
     return res.status(400).json({ error: `Cannot run: status=${job.status}` })
+  }
+
+  // メモリ圧迫チェック
+  if (isMemoryPressure()) {
+    const mem = getMemoryStatus()
+    return res.status(503).json({
+      error: 'System under memory pressure — job execution blocked',
+      freeGB: mem.freeGB,
+      usedPct: mem.usedPct,
+    })
   }
 
   // 予算チェック（Ollama以外）
@@ -131,6 +159,12 @@ app.post('/jobs/:id/cancel', (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Invalid request' })
 
   const { cancelledBy } = parsed.data
+
+  // Core側admin判定
+  if (!isAdminUser(cancelledBy)) {
+    return res.status(403).json({ error: 'Admin permission required (Core-enforced)', userId: cancelledBy })
+  }
+
   const job = db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(req.params.id) as Job | undefined
 
   if (!job) return res.status(404).json({ error: 'Job not found' })
@@ -151,11 +185,13 @@ app.get('/status', (_req, res) => {
 
   const staging = stagingSummary()
   const budget = getBudgetSummary()
+  const memory = getMemoryStatus()
 
   res.json({
     jobs: Object.fromEntries(summary.map(r => [r.status, r.count])),
     staging,
     budget,
+    memory,
     ts: Date.now()
   })
 })
