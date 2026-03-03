@@ -86,7 +86,7 @@ export interface BudgetCheckResult {
 
 export function checkBudget(provider: string): BudgetCheckResult {
   // Ollamaはローカル実行なのでコスト0 → 常に許可
-  if (provider === 'ollama' || provider === 'mock') {
+  if (provider === 'ollama' || provider === 'mock' || provider === 'glm-flash') {
     return {
       allowed: true,
       dailyCost: getTodayCost(),

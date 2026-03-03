@@ -1,0 +1,54 @@
+{
+  "mcpServers": {
+    "miyabi": {
+      "command": "npx",
+      "args": ["-y", "miyabi-mcp-bundle"],
+      "env": {
+        "MIYABI_REPO_PATH": "/oc",
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      }
+    }
+  },
+  "ocMaster": {
+    "description": "Miyabi ↔ OC-Master MCP Bridge Configuration",
+    "bridge": {
+      "coreUrl": "http://core:8787",
+      "coreToken": "${CORE_API_TOKEN}",
+      "agents": {
+        "CoordinatorAgent": {
+          "description": "タスク分解・Agent振り分け",
+          "defaultModel": "glm-flash",
+          "escalationModel": "glm-5"
+        },
+        "CodeGenAgent": {
+          "description": "コード生成・修正",
+          "defaultModel": "groq",
+          "escalationModel": "glm-5"
+        },
+        "ReviewAgent": {
+          "description": "コードレビュー・品質判定",
+          "defaultModel": "glm-flash",
+          "escalationModel": "groq"
+        },
+        "IssueAgent": {
+          "description": "Issue分析・分類",
+          "defaultModel": "glm-flash"
+        },
+        "PRAgent": {
+          "description": "PR作成・マージ判定",
+          "defaultModel": "groq"
+        }
+      }
+    },
+    "safety": {
+      "maxConcurrentAgents": 2,
+      "timeoutPerAgent": 180000,
+      "requireApprovalForDestructive": true,
+      "blockedOperations": [
+        "delete_branch",
+        "force_push",
+        "drop_database"
+      ]
+    }
+  }
+}

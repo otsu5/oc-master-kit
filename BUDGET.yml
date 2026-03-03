@@ -1,60 +1,92 @@
 # ════════════════════════════════════════════════════════════
 #  BUDGET.yml — AIコスト制御設定（OC-Core が読み込んで強制する）
 #
-#  設計思想:
-#  - 軽量タスク → Ollama（月$0・ローカル・プライバシー完全）
-#  - 重量タスク → Claude API（この設定で日次/月次制限を強制）
-#  - Ollamaとmockは常にコスト0扱い（制限対象外）
+#  4層ルーティング:
+#  Tier 0: GLM-Flash（完全無料・デフォルト）
+#  Tier 1: Ollama ローカル（$0・オフライン用）
+#  Tier 2: Groq Llama 70B（$0.59-0.79/M・高速）
+#  Tier 3: GLM-5（$1.00-3.20/M・重量級）
+#
+#  無料プロバイダ（glm-flash, ollama, mock）は制限対象外
 # ════════════════════════════════════════════════════════════
 
 daily_limit_usd: 5.00
 monthly_limit_usd: 50.00
 alert_threshold: 0.8   # 80%でTelegram警告
 
-# ── モデルルーティング参考 ─────────────────────────────────
+# ── モデルルーティング（タスク別推奨）────────────────────
 model_routing:
   classify:
-    provider: ollama
-    model: qwen2.5-coder:7b
+    provider: glm-flash     # Tier 0: 無料
+    model: glm-4.7-flash
     max_tokens: 1000
 
   simple_task:
-    provider: ollama
-    model: qwen2.5-coder:7b
+    provider: glm-flash     # Tier 0: 無料
+    model: glm-4.7-flash
     max_tokens: 2000
 
-  planning:
-    provider: claude
-    model: claude-sonnet-4-5
+  offline_task:
+    provider: ollama        # Tier 1: ローカル（オフライン時のみ）
+    model: phi-4-mini
+    max_tokens: 2000
+
+  medium_task:
+    provider: groq          # Tier 2: 爆速276tok/s
+    model: llama-3.3-70b-versatile
     max_tokens: 4096
 
-  orchestrate:
-    provider: claude
-    model: claude-opus-4-5
+  planning:
+    provider: glm-5         # Tier 3: 重量級
+    model: glm-5
     max_tokens: 8192
 
-  review:
-    provider: openai
-    model: gpt-4o
-    max_tokens: 4096
+  orchestrate:
+    provider: miyabi        # Miyabi整流経由
+    model: miyabi-runtime
+    max_tokens: 8192
 
-# ── Ollama設定 ────────────────────────────────────────────
+# ── 各プロバイダ設定 ──────────────────────────────────────
+glm:
+  base_url: https://open.bigmodel.cn/api/paas/v4
+  models:
+    flash: glm-4.7-flash    # $0（完全無料）
+    standard: glm-5          # $1.00/$3.20 per M tokens
+  max_concurrent: 5
+
+groq:
+  base_url: https://api.groq.com/openai/v1
+  model: llama-3.3-70b-versatile
+  cost_per_m:
+    input: 0.59
+    output: 0.79
+  max_concurrent: 3
+
 ollama:
   base_url: http://ollama:11434
-  heartbeat:
-    enabled: false
-    every: "2h"
   context:
     max_tokens: 40000
     compaction: aggressive
   routing:
-    simple_queries: qwen2.5-coder:7b
-    complex: qwen2.5-coder:7b
-  max_concurrent: 3
+    light: phi-4-mini          # 3.8B・オフライン用
+    heavy: qwen2.5-coder:7b    # 7B・ローカル重量級
+  max_concurrent: 1            # 16GB PCでは1本ずつ
   temperature: 0.2
   top_p: 0.9
 
-# ── おすすめモデル優先順位 ─────────────────────────────────
-# 1位: qwen2.5-coder:7b   日本語そこそこ・ツール安定・16GBで動く
-# 2位: phi-4-mini          3.8B・爆速・軽量タスク向き
-# 3位: gemma3:9b           新顔・期待値高い
+miyabi:
+  base_url: http://miyabi:9090
+  mcp_bridge: true
+  agents:
+    - CoordinatorAgent
+    - CodeGenAgent
+    - ReviewAgent
+    - IssueAgent
+    - PRAgent
+
+# ── おすすめ運用パターン ──────────────────────────────────
+# 日常: /add テキスト → glm-flash（無料）で処理
+# 速度重視: /add テキスト groq → Groq Llama 70B（276tok/s）
+# 設計・自律: /add テキスト glm-5 → GLM-5で深い推論
+# オフライン: /add テキスト ollama → ローカル処理
+# Miyabi整流: /add テキスト miyabi → 全Agent自律パイプライン

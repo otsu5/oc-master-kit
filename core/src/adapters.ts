@@ -172,7 +172,9 @@ class OpenAIAdapter implements AIAdapter {
 }
 
 // ══════════════════════════════════════════════════════════
-//  Miyabi Adapter — 自律実行（Phase2〜）
+//  Miyabi Adapter — 整流・オーケストレーション層
+//  Miyabi MCP → GLM/Groq APIへルーティング
+//  ローカルMiyabiランタイムがなければ GLM-Flash にフォールバック
 // ══════════════════════════════════════════════════════════
 class MiyabiAdapter implements AIAdapter {
   readonly name = 'miyabi'
@@ -182,17 +184,32 @@ class MiyabiAdapter implements AIAdapter {
 
   async generate(prompt: string): Promise<AIResult> {
     const { default: axios } = await import('axios')
-    const res = await axios.post(
-      `${this.baseUrl}/generate`,
-      { prompt },
-      { timeout: 180_000 }
-    )
-    return {
-      text: res.data.text ?? JSON.stringify(res.data),
-      costUsd: 0,
-      tokensIn: 0,
-      tokensOut: 0,
+
+    // まずMiyabiランタイムに接続を試みる
+    try {
+      const health = await axios.get(`${this.baseUrl}/health`, { timeout: 5_000 })
+      if (health.status === 200) {
+        const res = await axios.post(
+          `${this.baseUrl}/generate`,
+          { prompt },
+          { timeout: 180_000 }
+        )
+        return {
+          text: res.data.text ?? JSON.stringify(res.data),
+          costUsd: res.data.costUsd ?? 0,
+          tokensIn: res.data.tokensIn ?? 0,
+          tokensOut: res.data.tokensOut ?? 0,
+        }
+      }
+    } catch {
+      // Miyabiランタイム未起動 → GLM-Flashにフォールバック
+      console.warn('[Miyabi] Runtime not available, falling back to GLM-Flash')
     }
+
+    // フォールバック: GLM-Flashで処理（Miyabi的プロンプトラッピング）
+    const miyabiPrompt = `あなたはMiyabi CoordinatorAgentです。以下のタスクを分析し、実行計画を立て、結果を出力してください。\n\nタスク:\n${prompt}`
+    const fallback = new GLMFlashAdapter()
+    return fallback.generate(miyabiPrompt)
   }
 }
 
@@ -271,6 +288,149 @@ class RunPodAdapter implements AIAdapter {
 }
 
 // ══════════════════════════════════════════════════════════
+//  GLM-Flash Adapter — Tier 0（完全無料・日常タスク）
+//  GLM-4.7-Flash / GLM-4.5-Flash: $0/M tokens
+//  API: OpenAI互換（api.z.ai）
+// ══════════════════════════════════════════════════════════
+class GLMFlashAdapter implements AIAdapter {
+  readonly name = 'glm-flash'
+  readonly provider = 'glm'
+  readonly model: string
+
+  constructor() {
+    this.model = process.env.GLM_FLASH_MODEL ?? 'glm-4.7-flash'
+  }
+
+  async generate(prompt: string): Promise<AIResult> {
+    const apiKey = process.env.ZAI_API_KEY ?? process.env.GLM_API_KEY
+    if (!apiKey) throw new Error('ZAI_API_KEY (or GLM_API_KEY) not set')
+
+    return withRetry(async () => {
+      const { default: axios } = await import('axios')
+      const baseUrl = process.env.GLM_BASE_URL ?? 'https://open.bigmodel.cn/api/paas/v4'
+      const res = await axios.post(
+        `${baseUrl}/chat/completions`,
+        {
+          model: this.model,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 4096,
+          temperature: 0.3,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 120_000,
+        }
+      )
+      const usage = res.data.usage ?? {}
+      // Flash models are FREE
+      return {
+        text: res.data.choices?.[0]?.message?.content ?? JSON.stringify(res.data),
+        costUsd: 0,
+        tokensIn: usage.prompt_tokens ?? 0,
+        tokensOut: usage.completion_tokens ?? 0,
+      }
+    }, 2, 'GLM-Flash')
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  GLM-5 Adapter — Tier 3（重量級・自律Agent・設計）
+//  input $1.00/M, output $3.20/M
+// ══════════════════════════════════════════════════════════
+class GLM5Adapter implements AIAdapter {
+  readonly name = 'glm-5'
+  readonly provider = 'glm'
+  readonly model = 'glm-5'
+
+  async generate(prompt: string): Promise<AIResult> {
+    const apiKey = process.env.ZAI_API_KEY ?? process.env.GLM_API_KEY
+    if (!apiKey) throw new Error('ZAI_API_KEY (or GLM_API_KEY) not set')
+
+    return withRetry(async () => {
+      const { default: axios } = await import('axios')
+      const baseUrl = process.env.GLM_BASE_URL ?? 'https://open.bigmodel.cn/api/paas/v4'
+      const res = await axios.post(
+        `${baseUrl}/chat/completions`,
+        {
+          model: this.model,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 8192,
+          temperature: 0.4,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 180_000,
+        }
+      )
+      const usage = res.data.usage ?? {}
+      // GLM-5: input $1.00/MTok, output $3.20/MTok
+      const costUsd = ((usage.prompt_tokens ?? 0) * 1.0 + (usage.completion_tokens ?? 0) * 3.2) / 1_000_000
+      return {
+        text: res.data.choices?.[0]?.message?.content ?? JSON.stringify(res.data),
+        costUsd,
+        tokensIn: usage.prompt_tokens ?? 0,
+        tokensOut: usage.completion_tokens ?? 0,
+      }
+    }, 1, 'GLM-5')
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  Groq Adapter — Tier 2（超高速 276tok/s・OpenAI互換）
+//  Llama 3.3 70B: input $0.59/M, output $0.79/M
+//  無料枠あり（クレカ不要）
+// ══════════════════════════════════════════════════════════
+class GroqAdapter implements AIAdapter {
+  readonly name = 'groq'
+  readonly provider = 'groq'
+  readonly model: string
+
+  constructor() {
+    this.model = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
+  }
+
+  async generate(prompt: string): Promise<AIResult> {
+    const apiKey = process.env.GROQ_API_KEY
+    if (!apiKey) throw new Error('GROQ_API_KEY not set')
+
+    return withRetry(async () => {
+      const { default: axios } = await import('axios')
+      const res = await axios.post(
+        'https://api.groq.com/openai/v1/chat/completions',
+        {
+          model: this.model,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 4096,
+          temperature: 0.3,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 60_000,
+        }
+      )
+      const usage = res.data.usage ?? {}
+      // Llama 3.3 70B: input $0.59/M, output $0.79/M
+      const costUsd = ((usage.prompt_tokens ?? 0) * 0.59 + (usage.completion_tokens ?? 0) * 0.79) / 1_000_000
+      return {
+        text: res.data.choices?.[0]?.message?.content ?? JSON.stringify(res.data),
+        costUsd,
+        tokensIn: usage.prompt_tokens ?? 0,
+        tokensOut: usage.completion_tokens ?? 0,
+      }
+    }, 1, 'Groq')
+  }
+}
+
+// ══════════════════════════════════════════════════════════
 //  Mock Adapter — Phase1動作確認用
 // ══════════════════════════════════════════════════════════
 class MockAdapter implements AIAdapter {
@@ -292,13 +452,16 @@ class MockAdapter implements AIAdapter {
 // ── ルーター ─────────────────────────────────────────────
 export function getAdapter(type: AgentType): AIAdapter {
   switch (type) {
-    case 'ollama':   return new OllamaAdapter()
-    case 'claude':   return new ClaudeAdapter('claude-sonnet-4-5')
-    case 'opus':     return new ClaudeAdapter('claude-opus-4-5')
-    case 'openai':   return new OpenAIAdapter()
-    case 'miyabi':   return new MiyabiAdapter()
-    case 'runpod':   return new RunPodAdapter()
-    case 'mock':     return new MockAdapter()
-    default:         return new OllamaAdapter()
+    case 'ollama':     return new OllamaAdapter()
+    case 'claude':     return new ClaudeAdapter('claude-sonnet-4-5')
+    case 'opus':       return new ClaudeAdapter('claude-opus-4-5')
+    case 'openai':     return new OpenAIAdapter()
+    case 'miyabi':     return new MiyabiAdapter()
+    case 'runpod':     return new RunPodAdapter()
+    case 'glm-flash':  return new GLMFlashAdapter()
+    case 'glm-5':      return new GLM5Adapter()
+    case 'groq':       return new GroqAdapter()
+    case 'mock':       return new MockAdapter()
+    default:           return new GLMFlashAdapter()  // デフォルト: GLM-Flash（無料）
   }
 }

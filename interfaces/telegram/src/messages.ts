@@ -107,18 +107,20 @@ export function msgHelp(admin: boolean) {
 \`/cancel <id>\` — キャンセル
 \`/status\` — システム状態` : ''
 
-  return `🤖 *OC\\-Master v5*
+  return `🤖 *OC\\-Master v5\\.1*
 ━━━━━━━━━━━━━━
 *基本コマンド:*
-\`/add <内容>\` — Ollamaでジョブ追加
-\`/add <内容> claude\` — Claude指定
-\`/add <内容> runpod\` — 画像生成
+\`/add <内容>\` — GLM\\-Flash（無料）
+\`/add <内容> groq\` — Groq高速推論
+\`/add <内容> glm\\-5\` — GLM\\-5重量級
+\`/add <内容> ollama\` — ローカル
+\`/add <内容> miyabi\` — Miyabi自律
 \`/list\` — ジョブ一覧
 \`/job <id>\` — 詳細
 \`/help\` — このヘルプ
 ${adminPart}
 ━━━━━━━━━━━━━━
-🦙 _Default: Ollama（ローカル・月\\$0）_`
+⚡ _Default: GLM\\-Flash（完全無料）_`
 }
 
 function esc(s: string) {

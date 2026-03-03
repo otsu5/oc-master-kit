@@ -11,10 +11,10 @@ db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 
 export type JobStatus  = 'PENDING' | 'APPROVED' | 'RUNNING' | 'DONE' | 'CANCELLED' | 'ERROR'
-export type AgentType  = 'ollama' | 'claude' | 'opus' | 'openai' | 'miyabi' | 'runpod' | 'mock'
+export type AgentType  = 'ollama' | 'claude' | 'opus' | 'openai' | 'miyabi' | 'runpod' | 'mock' | 'glm-flash' | 'glm-5' | 'groq'
 
 export const VALID_AGENT_TYPES: AgentType[] = [
-  'ollama', 'claude', 'opus', 'openai', 'miyabi', 'runpod', 'mock'
+  'ollama', 'claude', 'opus', 'openai', 'miyabi', 'runpod', 'mock', 'glm-flash', 'glm-5', 'groq'
 ]
 
 export interface Job {

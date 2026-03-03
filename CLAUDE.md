@@ -1,44 +1,21 @@
-# OC-Master v5.1 — Claude Code CLI 指示書
-
-## プロジェクト概要
-
-- ローカルPC（第6世代CPU、16GB RAM）でプライバシー100%守る
-- **Ollama がメインエンジン（月$0）** — Claude APIは重量タスクのみ
-- BUDGET.yml で日次/月次コスト制限を**コードレベルで強制**
-- Syncthing で生成物をスマホに自動配送（assets除外）
-- rclone でバックアップ（Syncthing削除リスク対策）
+# OC-Master v5.2 — Claude Code CLI 指示書
 
 ## 絶対ルール（変更禁止）
 
-1. **AI の書き込みは `/oc/staging` のみ**
-2. **削除・移動・上書き禁止**（`flag: 'wx'` を維持）
-3. **デフォルト agentType は `ollama`**（Claude APIは明示指定時のみ）
-4. **外部公開禁止**（Core APIはDockerネットワーク内部のみ・ポート非公開）
-5. **Syncthing にassetsをマウントしない**（削除伝播リスク）
-6. **Core API は CORE_API_TOKEN で認証**
-7. **run/cancel のadmin判定はCore側で強制**（Interface層を信用しない）
+1. AI の書き込みは `/oc/staging` のみ（削除・移動・上書き禁止、flag: 'wx'）
+2. デフォルト agentType は `glm-flash`（GLM-4.7-Flash・完全無料）
+3. Core APIはDockerネットワーク内部のみ（ポート非公開）
+4. run/cancelのadmin判定はCore側で強制（Interface層を信用しない）
+5. Syncthing にassetsをマウントしない（削除伝播リスク）
 
-## アーキテクチャ
+## 4層ルーティング
 
 ```
-Telegram Bot（メイン指揮・承認・通知）
-    ↓ Tailscale VPN
-OC-Core :8787（内部のみ）
-    ├── Bearer Token認証
-    ├── Core側admin判定
-    ├── プロンプトサニタイズ
-    ├── メモリ監視
-    └── BUDGET.yml予算強制
-    ↓
-[Ollama :11434] ← デフォルト（月$0）
-[Claude API]    ← 重量タスクのみ
-[RunPod]        ← 画像生成（Phase4〜）
-    ↓
-/oc/staging → Syncthing → スマホ
-                 ↓ rclone → MEGA
-
-Discord Bot（書庫モード・スレッド整理・閲覧）
-PC監視: OpenWebUI :3000 / Syncthing :8384
+Tier 0: glm-flash    GLM-4.7-Flash   $0          日常タスク（デフォルト）
+Tier 1: ollama       phi-4-mini      $0          オフライン
+Tier 2: groq         Llama 3.3 70B   $0.59-0.79  高速・中量級
+Tier 3: glm-5        GLM-5           $1.00-3.20  自律Agent・設計
+Special: miyabi      Miyabi MCP      varies      整流オーケストレーション
 ```
 
 ## コード構成
@@ -46,34 +23,24 @@ PC監視: OpenWebUI :3000 / Syncthing :8384
 ```
 oc-master-kit/
 ├── core/src/
-│   ├── index.ts          # Express API
-│   ├── db.ts             # SQLite + 監査 + コスト記録
-│   ├── adapters.ts       # AI Adapter層
-│   ├── runner.service.ts # ファイル書き込み境界
-│   ├── auth.ts           # API認証 + Core側admin判定
-│   ├── budget.ts         # BUDGET.yml予算強制
-│   ├── validate.ts       # Zodバリデーション
-│   ├── sanitize.ts       # プロンプトサニタイズ
-│   └── memory.ts         # メモリ監視
-├── interfaces/
-│   ├── telegram/         # メイン指揮（ジョブ投入・承認）
-│   └── discord/          # 書庫（スレッド整理・閲覧）
-├── scripts/
-│   ├── init.ps1          # Windows セットアップ（推奨）
-│   ├── init.sh           # Linux セットアップ
-│   └── ...
-├── docker-compose.yml
-├── BUDGET.yml
-└── .gitignore
+│   ├── index.ts, db.ts, adapters.ts（GLM/Groq/Ollama/Miyabi）
+│   ├── auth.ts（認証+Core側admin）, budget.ts, validate.ts
+│   ├── sanitize.ts, memory.ts, runner.service.ts
+├── interfaces/telegram/（メイン指揮）
+├── interfaces/discord/（書庫・スレッド整理）
+├── miyabi.config.json（MCP Bridge設定）
+├── BUDGET.yml, docker-compose.yml
+└── scripts/init.ps1, init.sh
 ```
 
-## コマンド
+## Telegramコマンド
 
-```bash
-# Windows
-powershell .\scripts\init.ps1
-docker compose up -d --build
-
-# Ollamaモデル準備
-docker exec oc_ollama ollama pull qwen2.5-coder:7b
+```
+/add <内容>              → glm-flash（無料）
+/add <内容> groq         → Groq爆速
+/add <内容> glm-5        → GLM-5重量級
+/add <内容> ollama       → ローカル
+/add <内容> miyabi       → Miyabi自律実行
+/run <id>  /cancel <id>  → 管理者のみ
+/status  /list  /help
 ```

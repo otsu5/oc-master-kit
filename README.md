@@ -1,80 +1,62 @@
-# OC-Master v5.1
+# OC-Master v5.2
 
-**ローカルAIエージェント基盤** — Ollama + OC-Core + Telegram + Discord + Syncthing + rclone
+**ローカルAIエージェント基盤** — Miyabi整流 + GLM/Groq/Ollama + Telegram + Discord + Syncthing
 
 ```
-設計思想: ローカルPC（16GB RAM）でプライバシー100%守りながら
-          Ollama（月$0）をメインエンジンとして運用
-          Telegram = 指揮官  |  Discord = 書庫
+Telegram = 指揮官  |  Miyabi = 整流  |  Discord = 書庫
+GLM-Flash = 日常無料  |  Groq = 高速  |  GLM-5 = 重量級
 ```
 
 ## アーキテクチャ
 
 ```
-📱 Telegram（メイン指揮・ジョブ投入・承認・通知）
+📱 Telegram（/add テキスト → ジョブ投入・承認・通知）
        ↓ Tailscale VPN
-⚙️  OC-Core :8787（内部のみ・ホスト非公開）
-  ├── Bearer Token認証
-  ├── Core側admin判定（Interface信用しない）
-  ├── BUDGET.yml 予算強制
-  ├── プロンプトサニタイズ
-  └── メモリ監視（OOM防止）
+⚙️  OC-Core :8787（内部のみ）
+  ├── Bearer Token認証 + Core側admin判定
+  ├── プロンプトサニタイズ + メモリ監視
+  └── BUDGET.yml予算強制
+       ↓ AI Adapter 4層ルーティング
+  Tier 0: GLM-4.7-Flash   $0（デフォルト・完全無料）
+  Tier 1: Ollama ローカル  $0（オフライン用）
+  Tier 2: Groq Llama 70B   ~$0.7/M（爆速276tok/s）
+  Tier 3: GLM-5            ~$1-3.2/M（自律Agent・設計）
        ↓
-🦙 Ollama :11434（メイン・月$0）
-🤖 Claude API（重量タスクのみ・予算制限）
+  🎯 Miyabi（整流・オーケストレーション・MCP）
        ↓
-📁 staging → 🔄 Syncthing → 📱 スマホ
-
-💬 Discord（書庫モード・スレッドで結果整理・閲覧）
-🖥️ OpenWebUI :3000（PCでモデル管理）
+  📁 staging → 🔄 Syncthing → 📱 スマホ
+  💬 Discord（!oc list → スレッドで結果閲覧）
 ```
 
 ## クイックスタート
 
-### Windows（推奨）
 ```powershell
+# Windows
 .\scripts\init.ps1
 
-# .env 編集 → Ollamaモデル準備 → 起動
-docker compose up -d ollama
-docker exec oc_ollama ollama pull qwen2.5-coder:7b
+# .env 編集: ZAI_API_KEY, GROQ_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_IDS
 docker compose up -d --build
+
+# Telegramで
+/add 最新のAI論文を要約して          ← GLM-Flash（無料）
+/add コードレビューお願い groq        ← Groq（爆速）
+/add システム設計書を作成 glm-5       ← GLM-5（重量級）
+/add 全自動でIssue処理 miyabi        ← Miyabi整流
 ```
 
-### Linux/WSL2
-```bash
-bash scripts/init.sh
-docker compose up -d --build
-```
+## コスト試算
 
-## Interface設計
-
-| Interface | 役割 | コマンド |
-|---|---|---|
-| **Telegram** | **メイン指揮** — ジョブ投入・承認・通知 | `/add`, `/run`, `/cancel`, `/status` |
-| **Discord** | **書庫** — スレッドで結果整理・閲覧・検索 | `!oc list`, `!oc job`, `!oc archive` |
-| **OpenWebUI** | PCモデル管理・チャット | http://localhost:3000 |
-
-### なぜ2つ？
-- **Telegram**: モバイルから素早く指示・承認。1対1のシンプルなやり取り
-- **Discord**: スレッド形式で過去の結果を整理。「どの話題がどこにあるか」すぐ見つかる書庫
-
-## セキュリティ（v5.1強化）
-
-| 防御層 | 実装 |
+| 使い方 | 月額 |
 |---|---|
-| API認証 | CORE_API_TOKEN Bearer認証 |
-| **Core側admin判定** | Interface側のisAdminを信用しない。Core自身がADMIN_IDSで検証 |
-| **ポート非公開** | Core APIはDockerネットワーク内部のみ（ホストに公開しない） |
-| **プロンプトサニタイズ** | 危険パターンブロック（インジェクション・システムコマンド・ファイルパス） |
-| **メモリ監視** | 残0.5GB以下で新規ジョブ受付停止（OOMフリーズ防止） |
-| 予算制御 | BUDGET.yml日次$5/月次$50をコードレベル強制 |
-| ファイル境界 | staging限定書き込み、削除・上書き禁止 |
-| 同期安全 | assetsはSyncthing対象外（削除伝播防止） |
-| VPN | Tailscale経由のみ |
+| GLM-Flashのみ（日常） | **$0** |
+| Flash + Groq 50回/月 | **~$2** |
+| Flash + Groq + GLM-5 10回/月 | **~$5** |
+| 上記 + Ollama オフライン | **~$5** |
 
-## 詳細ドキュメント
+## セキュリティ
 
-- [フェーズ計画](docs/PHASES.md)
-- [セキュリティ設定](docs/SECURITY.md)
-- [Claude Code CLI用](CLAUDE.md)
+Core側admin判定、ポート非公開、プロンプトサニタイズ、メモリ監視、Bearer認証、BUDGET.yml予算強制、staging限定書き込み、Tailscale VPN。
+
+## 詳細
+
+- [フェーズ計画](docs/PHASES.md) | [セキュリティ](docs/SECURITY.md) | [Claude Code用](CLAUDE.md)

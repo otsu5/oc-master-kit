@@ -28,11 +28,11 @@ const replyWithApproval = (cid: number, jobId: string, text: string) =>
   })
 
 // ── agentType パーサー（P2修正: 明確なロジック）──────────
-const VALID_AGENTS = new Set(['ollama', 'claude', 'opus', 'openai', 'miyabi', 'runpod', 'mock'])
+const VALID_AGENTS = new Set(['ollama', 'claude', 'opus', 'openai', 'miyabi', 'runpod', 'mock', 'glm-flash', 'glm-5', 'groq'])
 
 function parseAddInput(input: string): { text: string; agentType: string } {
   const trimmed = input.trim()
-  if (!trimmed) return { text: '', agentType: 'ollama' }
+  if (!trimmed) return { text: '', agentType: 'glm-flash' }
 
   const words = trimmed.split(/\s+/)
   const lastWord = words[words.length - 1].toLowerCase()
@@ -46,7 +46,7 @@ function parseAddInput(input: string): { text: string; agentType: string } {
   }
 
   // それ以外はすべてOllamaでテキスト全体を使用
-  return { text: trimmed, agentType: 'ollama' }
+  return { text: trimmed, agentType: 'glm-flash' }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -66,10 +66,10 @@ bot.onText(/^\/add (.+)$/s, async (msg, match) => {
   if (!uid || !isAllowed(uid)) return replyPlain(msg.chat.id, '⛔ アクセス権限なし')
 
   const rawInput = match?.[1]
-  if (!rawInput) return replyPlain(msg.chat.id, '使い方: /add <内容> [ollama|claude|runpod]')
+  if (!rawInput) return replyPlain(msg.chat.id, '使い方: /add <内容> [glm-flash|groq|glm-5]')
 
   const { text, agentType } = parseAddInput(rawInput)
-  if (!text) return replyPlain(msg.chat.id, '使い方: /add <内容> [ollama|claude|runpod]')
+  if (!text) return replyPlain(msg.chat.id, '使い方: /add <内容> [glm-flash|groq|glm-5]')
 
   try {
     const job = await api.addJob(text, String(uid), agentType)
