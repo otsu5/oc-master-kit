@@ -9,9 +9,11 @@ import { CreateJobSchema, RunJobSchema, CancelJobSchema } from './validate.js'
 import { sanitizePrompt } from './sanitize.js'
 import { startMemoryMonitor, isMemoryPressure, getMemoryStatus } from './memory.js'
 
-initDB()
-checkAuthConfig()
-startMemoryMonitor()
+;(async () => {
+  await initDB()
+  checkAuthConfig()
+  startMemoryMonitor()
+})()
 
 const app = express()
 app.use(express.json())

@@ -26,18 +26,26 @@ export interface Job {
 export class Database {
   private db: any
   private dbPath: string
+  private initialized: boolean = false
 
-  constructor(data?: Uint8Array | undefined) {
+  constructor() {
     this.dbPath = process.env.DB_PATH ?? '/oc/agent/queue/oc_core.sqlite'
+  }
+
+  async init(): Promise<void> {
+    if (this.initialized) return
+
     const dbDir = path.dirname(this.dbPath)
     if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true })
 
-    this.db = new initSqlJs()
-    this.db.open(data)
-    this.init()
+    const SQL = await initSqlJs()
+    this.db = new SQL.Database()
+    this.initialized = true
+
+    this.initTables()
   }
 
-  private init(): void {
+  private initTables(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS jobs (
         id          TEXT PRIMARY KEY,
@@ -150,9 +158,10 @@ export class Database {
 // グローバルインスタンス
 let globalDb: Database | null = null
 
-export function initDB(): void {
+export async function initDB(): Promise<void> {
   if (!globalDb) {
     globalDb = new Database()
+    await globalDb.init()
   }
 }
 
